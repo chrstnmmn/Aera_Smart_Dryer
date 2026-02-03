@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"name": "top_controller",
+			"path": "firmware/top_controller"
+		},
+		{
+			"name": "bottom_controller",
+			"path": "firmware/bottom_controller"
+		}
+	],
+	"settings": {}
+}
