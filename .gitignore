@@ -1,0 +1,17 @@
+# --- Firmware Junk ---
+firmware/**/.pio
+firmware/**/.vscode
+firmware/**/sdkconfig
+firmware/**/sdkconfig.esp32dev
+firmware/**/build
+firmware/**/managed_components
+
+# --- App Junk ---
+mobile-app/node_modules/
+mobile-app/.expo/
+mobile-app/web-build/
+mobile-app/.gitignore
+
+# --- System Junk ---
+.DS_Store
+Thumbs.db
