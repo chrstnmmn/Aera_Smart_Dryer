@@ -15,3 +15,4 @@ mobile-app/.gitignore
 # --- System Junk ---
 .DS_Store
 Thumbs.db
+node_modules
