@@ -1,74 +1,130 @@
+/**
+ * TOP CONTROLLER (UI Board)
+ * Role: Wi-Fi WebSocket Server (STATIC IP) & UART Sender
+ */
 #include <Arduino.h>
+#include <WiFi.h>
+#include <WebSocketsServer.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+// --- PINS ---
 #define RXD2 4
 #define TXD2 5
 #define LED_PIN 2
 
-// --- TASK 1: THE COMMUNICATOR ---
-void TaskUART(void *pvParameters)
+// --- WIFI CREDENTIALS ---
+const char *ssid = "HUAWEI-2.4G-ZxPH";
+const char *password = "vq5hJkB8";
+
+// --- STATIC IP SETTINGS (Matches your Router) ---
+IPAddress local_IP(192, 168, 18, 200); // <--- We force this IP
+IPAddress gateway(192, 168, 18, 1);    // <--- Your Gateway
+IPAddress subnet(255, 255, 255, 0);
+IPAddress primaryDNS(8, 8, 8, 8); // Google DNS
+
+// --- WEBSOCKET SERVER on PORT 81 ---
+WebSocketsServer webSocket = WebSocketsServer(81);
+
+// --- HELPER: UART SENDER ---
+void sendToBottom(String command)
 {
-    // 1. Setup Serial2 with a safety timeout!
-    Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);
-    Serial2.setTimeout(50); // <--- CRITICAL FIX: Only block for 50ms, not 1000ms
+    Serial.print("UART >> ");
+    Serial.println(command);
+    Serial2.println(command);
+}
 
-    Serial.println("UART Task Started");
+// --- WEBSOCKET EVENT HANDLER ---
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
+{
+    String text = "";
 
-    for (;;)
+    switch (type)
     {
-        Serial.print("Sending PING... ");
-        // Clear buffer before sending to avoid reading old junk
-        while (Serial2.available())
-            Serial2.read();
+    case WStype_DISCONNECTED:
+        Serial.printf("[%u] Disconnected!\n", num);
+        break;
+    case WStype_CONNECTED:
+        Serial.printf("[%u] Connected!\n", num);
+        webSocket.sendTXT(num, "Connected to Aera Dryer");
+        break;
+    case WStype_TEXT:
+        text = (char *)payload;
+        Serial.printf("[%u] Received: %s\n", num, text.c_str());
 
-        Serial2.println("PING");
-
-        // Wait for reply safely
-        unsigned long start = millis();
-        bool received = false;
-
-        while (millis() - start < 1000)
+        if (text == "ON")
         {
-            if (Serial2.available())
-            {
-                // This line used to crash the system. Now it's safe.
-                String s = Serial2.readStringUntil('\n');
-                s.trim();
-
-                if (s == "PONG")
-                {
-                    Serial.println("Success! Got PONG.");
-                    received = true;
-                    break;
-                }
-            }
-            // Vital: Give the CPU back to the OS for 10ms
-            vTaskDelay(10 / portTICK_PERIOD_MS);
+            sendToBottom("turn_ON_led");
+            webSocket.broadcastTXT("STATUS:ON");
         }
-
-        if (!received)
-            Serial.println("Failed. No reply.");
-
-        // Wait 2 seconds before next ping
-        vTaskDelay(2000 / portTICK_PERIOD_MS);
+        else if (text == "OFF")
+        {
+            sendToBottom("turn_OFF_led");
+            webSocket.broadcastTXT("STATUS:OFF");
+        }
+        break;
+    case WStype_BIN:
+    case WStype_ERROR:
+    case WStype_FRAGMENT_TEXT_START:
+    case WStype_FRAGMENT_BIN_START:
+    case WStype_FRAGMENT:
+    case WStype_FRAGMENT_FIN:
+    default:
+        break;
     }
 }
 
+// --- TASK: WIFI & WEBSOCKET ---
+void TaskNet(void *pvParameters)
+{
+    // 1. FORCE STATIC IP
+    if (!WiFi.config(local_IP, gateway, subnet, primaryDNS))
+    {
+        Serial.println("Static IP Failed to configure!");
+    }
+
+    // 2. Connect
+    WiFi.begin(ssid, password);
+    Serial.print("Connecting to Wi-Fi");
+
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        delay(500);
+        Serial.print(".");
+    }
+
+    Serial.println("\nWiFi Connected!");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
+
+    // 3. Start WebSocket
+    webSocket.begin();
+    webSocket.onEvent(webSocketEvent);
+
+    for (;;)
+    {
+        webSocket.loop();
+        vTaskDelay(5 / portTICK_PERIOD_MS);
+    }
+}
+
+// --- TASK: BLINK (Status) ---
 void TaskBlink(void *pvParameters)
 {
     pinMode(LED_PIN, OUTPUT);
     for (;;)
     {
         digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-        vTaskDelay(500 / portTICK_PERIOD_MS);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
 
 void setup()
 {
     Serial.begin(115200);
-    xTaskCreatePinnedToCore(TaskUART, "UART", 4096, NULL, 1, NULL, 0);
+    Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);
+
+    xTaskCreatePinnedToCore(TaskNet, "Net", 8192, NULL, 1, NULL, 0);
     xTaskCreatePinnedToCore(TaskBlink, "Blink", 2048, NULL, 1, NULL, 1);
 }
 

@@ -1,79 +1,70 @@
 /**
  * BOTTOM CONTROLLER (Main Board)
- * Role: Listener (Ponger)
- * Actions: Waits for PING from Top, replies PONG.
+ * Role: ACTOR
+ * Action: Receives "turn_ON_led" -> Turns Pin 2 HIGH
  */
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+// --- PINS (Matches your setup) ---
 #define RXD2 4
 #define TXD2 5
 #define LED_PIN 2
 
-// --- TASK 1: THE LISTENER ---
+// --- TASK: THE LISTENER ---
 void TaskUART(void *pvParameters)
 {
-    // 1. Setup Serial2
     Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);
-    Serial2.setTimeout(50); // Safety timeout
-    
-    Serial.println("UART Task Started (Listening Mode)");
+    Serial2.setTimeout(50);
+
+    // Set LED to Output and start OFF
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, LOW);
+
+    Serial.println("UART Task Started. Waiting for commands...");
 
     for (;;)
     {
-        // 2. Check if data is available
         if (Serial2.available())
         {
             String s = Serial2.readStringUntil('\n');
-            s.trim(); // Remove whitespace/newlines
+            s.trim();
 
-            // 3. If Top says "PING", we say "PONG"
-            if (s == "PING")
+            // LOGIC: Check for specific commands
+            if (s == "turn_ON_led")
             {
-                Serial.println("Heard PING! Replying PONG...");
-                Serial2.println("PONG");
+                Serial.println("Command: LED ON");
+                digitalWrite(LED_PIN, HIGH); // Turn ON and keep it ON
+            }
+            else if (s == "turn_OFF_led")
+            {
+                Serial.println("Command: LED OFF");
+                digitalWrite(LED_PIN, LOW); // Turn OFF and keep it OFF
             }
             else if (s.length() > 0)
             {
-                // Debugging: Print any weird garbage we receive
-                Serial.print("Received Unknown: ");
+                Serial.print("Unknown Command: ");
                 Serial.println(s);
             }
         }
 
-        // CRITICAL: Yield to Watchdog Timer (WDT)
-        // If no data, this lets the CPU rest.
+        // Essential delay to prevent Watchdog Crash
         vTaskDelay(10 / portTICK_PERIOD_MS);
     }
 }
 
-// --- TASK 2: THE HEARTBEAT ---
-void TaskBlink(void *pvParameters)
-{
-    pinMode(LED_PIN, OUTPUT);
-    for (;;)
-    {
-        // Blink fast (200ms) to distinguish from Top board
-        digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-        vTaskDelay(200 / portTICK_PERIOD_MS);
-    }
-}
-
-// --- STANDARD SETUP ---
 void setup()
 {
     Serial.begin(115200);
-    
-    // Core 0 is usually busy with Wi-Fi, so we can put UART there if Wi-Fi isn't heavy yet.
-    // Or stick to Core 1 (App Core) to be safe from WDT resets.
+
+    // We only run the UART task now.
+    // I removed TaskBlink so it doesn't fight for control of the LED.
     xTaskCreatePinnedToCore(TaskUART, "UART", 4096, NULL, 1, NULL, 1);
-    xTaskCreatePinnedToCore(TaskBlink, "Blink", 2048, NULL, 1, NULL, 1);
 }
 
 void loop() { vTaskDelete(NULL); }
 
-// --- HYBRID FIX ---
 extern "C" void app_main()
 {
     initArduino();
