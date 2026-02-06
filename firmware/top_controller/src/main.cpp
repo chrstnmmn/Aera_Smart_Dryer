@@ -1,27 +1,30 @@
-/**
- * BOARD A: MAIN CONTROLLER
- * Stack: Hybrid (ESP-IDF + Arduino)
- */
 #include <Arduino.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#define RXD2 16
-#define TXD2 17
+#define RXD2 4
+#define TXD2 5
 #define LED_PIN 2
 
 // --- TASK 1: THE COMMUNICATOR ---
 void TaskUART(void *pvParameters)
 {
+    // 1. Setup Serial2 with a safety timeout!
     Serial2.begin(115200, SERIAL_8N1, RXD2, TXD2);
+    Serial2.setTimeout(50); // <--- CRITICAL FIX: Only block for 50ms, not 1000ms
+
     Serial.println("UART Task Started");
 
     for (;;)
-    { // Infinite Loop
+    {
         Serial.print("Sending PING... ");
-        Serial2.println("PING"); // Send to Board B
+        // Clear buffer before sending to avoid reading old junk
+        while (Serial2.available())
+            Serial2.read();
 
-        // Wait for reply (Non-blocking)
+        Serial2.println("PING");
+
+        // Wait for reply safely
         unsigned long start = millis();
         bool received = false;
 
@@ -29,8 +32,10 @@ void TaskUART(void *pvParameters)
         {
             if (Serial2.available())
             {
+                // This line used to crash the system. Now it's safe.
                 String s = Serial2.readStringUntil('\n');
                 s.trim();
+
                 if (s == "PONG")
                 {
                     Serial.println("Success! Got PONG.");
@@ -38,49 +43,39 @@ void TaskUART(void *pvParameters)
                     break;
                 }
             }
-            vTaskDelay(10 / portTICK_PERIOD_MS); // Yield
+            // Vital: Give the CPU back to the OS for 10ms
+            vTaskDelay(10 / portTICK_PERIOD_MS);
         }
 
         if (!received)
             Serial.println("Failed. No reply.");
 
-        vTaskDelay(2000 / portTICK_PERIOD_MS); // Wait 2 seconds
+        // Wait 2 seconds before next ping
+        vTaskDelay(2000 / portTICK_PERIOD_MS);
     }
 }
 
-// --- TASK 2: THE HEARTBEAT ---
 void TaskBlink(void *pvParameters)
 {
     pinMode(LED_PIN, OUTPUT);
     for (;;)
     {
-        digitalWrite(LED_PIN, !digitalRead(LED_PIN)); // Toggle LED
+        digitalWrite(LED_PIN, !digitalRead(LED_PIN));
         vTaskDelay(500 / portTICK_PERIOD_MS);
     }
 }
 
-// --- STANDARD SETUP ---
 void setup()
 {
     Serial.begin(115200);
-
-    // Run UART on Core 0 (Protocol CPU)
     xTaskCreatePinnedToCore(TaskUART, "UART", 4096, NULL, 1, NULL, 0);
-
-    // Run Blink on Core 1 (Application CPU)
     xTaskCreatePinnedToCore(TaskBlink, "Blink", 2048, NULL, 1, NULL, 1);
 }
 
-void loop()
-{
-    // FreeRTOS has taken over. We can delete this task.
-    vTaskDelete(NULL);
-}
+void loop() { vTaskDelete(NULL); }
 
-// --- HYBRID FIX: REQUIRED FOR LINKER ERROR ---
 extern "C" void app_main()
 {
-    initArduino(); // Initialize the Arduino Framework
-    setup();       // Run your setup
-    // We don't need a loop() here because we used FreeRTOS tasks above
+    initArduino();
+    setup();
 }
