@@ -1,6 +1,7 @@
 /**
  * TOP CONTROLLER (UI Board)
  * Role: Wi-Fi WebSocket Server (STATIC IP) & UART Sender
+ * STATUS LED: Fast Blink = Connecting | OFF = Connected
  */
 #include <Arduino.h>
 #include <WiFi.h>
@@ -17,13 +18,17 @@
 const char *ssid = "HUAWEI-2.4G-ZxPH";
 const char *password = "vq5hJkB8";
 
-// --- STATIC IP SETTINGS (Matches your Router) ---
-IPAddress local_IP(192, 168, 18, 200); // <--- We force this IP
-IPAddress gateway(192, 168, 18, 1);    // <--- Your Gateway
+// --- STATIC IP SETTINGS ---
+IPAddress local_IP(192, 168, 18, 200);
+IPAddress gateway(192, 168, 18, 1);
 IPAddress subnet(255, 255, 255, 0);
-IPAddress primaryDNS(8, 8, 8, 8); // Google DNS
+IPAddress primaryDNS(8, 8, 8, 8);
 
-// --- WEBSOCKET SERVER on PORT 81 ---
+// --- GLOBAL FLAGS ---
+// This variable tells TaskBlink what to do
+volatile bool wifiConnected = false;
+
+// --- WEBSOCKET SERVER ---
 WebSocketsServer webSocket = WebSocketsServer(81);
 
 // --- HELPER: UART SENDER ---
@@ -38,7 +43,6 @@ void sendToBottom(String command)
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 {
     String text = "";
-
     switch (type)
     {
     case WStype_DISCONNECTED:
@@ -51,7 +55,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
     case WStype_TEXT:
         text = (char *)payload;
         Serial.printf("[%u] Received: %s\n", num, text.c_str());
-
         if (text == "ON")
         {
             sendToBottom("turn_ON_led");
@@ -62,13 +65,11 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
             sendToBottom("turn_OFF_led");
             webSocket.broadcastTXT("STATUS:OFF");
         }
+        else if (text == "PING")
+        {
+            webSocket.sendTXT(num, "PONG");
+        }
         break;
-    case WStype_BIN:
-    case WStype_ERROR:
-    case WStype_FRAGMENT_TEXT_START:
-    case WStype_FRAGMENT_BIN_START:
-    case WStype_FRAGMENT:
-    case WStype_FRAGMENT_FIN:
     default:
         break;
     }
@@ -87,35 +88,61 @@ void TaskNet(void *pvParameters)
     WiFi.begin(ssid, password);
     Serial.print("Connecting to Wi-Fi");
 
+    // Loop until connected
     while (WiFi.status() != WL_CONNECTED)
     {
+        wifiConnected = false; // Tell Blink Task to go crazy
         delay(500);
         Serial.print(".");
     }
 
+    // 3. Success!
     Serial.println("\nWiFi Connected!");
     Serial.print("IP Address: ");
     Serial.println(WiFi.localIP());
 
-    // 3. Start WebSocket
+    wifiConnected = true; // Tell Blink Task to STOP
+
+    // 4. Start WebSocket
     webSocket.begin();
     webSocket.onEvent(webSocketEvent);
 
     for (;;)
     {
+        // If we lose connection, update the flag so blinking starts again
+        if (WiFi.status() != WL_CONNECTED)
+        {
+            wifiConnected = false;
+        }
+        else
+        {
+            wifiConnected = true;
+        }
+
         webSocket.loop();
         vTaskDelay(5 / portTICK_PERIOD_MS);
     }
 }
 
-// --- TASK: BLINK (Status) ---
+// --- TASK: BLINK (Status Indicator) ---
 void TaskBlink(void *pvParameters)
 {
     pinMode(LED_PIN, OUTPUT);
+
     for (;;)
     {
-        digitalWrite(LED_PIN, !digitalRead(LED_PIN));
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        if (wifiConnected)
+        {
+            // CASE A: CONNECTED -> LED OFF (Chill Mode)
+            digitalWrite(LED_PIN, LOW);
+            vTaskDelay(500 / portTICK_PERIOD_MS); // Check again in 0.5s
+        }
+        else
+        {
+            // CASE B: CONNECTING -> FAST BLINK (Panic Mode)
+            digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+            vTaskDelay(100 / portTICK_PERIOD_MS); // 100ms = Very Fast
+        }
     }
 }
 
